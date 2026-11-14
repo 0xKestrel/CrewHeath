@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Crew Health Companion</title>
+<style>
+:root{--bg:#f2f5fb;--card:#fff;--line:#d0daee;--txt:#0d1a33;--mute:#4d6188;--acc:#0b8fbd;--on:#fff;--ok:#12803f;--warn:#9a6200;--hi:#c62839;--chip:#e4ecf8;--map:#dde6f6;padding-top:env(safe-area-inset-top,0px);box-sizing:border-box}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#050914;--card:#0d1729;--line:#1e3054;--txt:#eaf1ff;--mute:#9aaed0;--acc:#4cc9f0;--on:#04111f;--ok:#4ade80;--warn:#fbbf24;--hi:#ff7d8a;--chip:#16274a;--map:#1a2c4d}}
+:root[data-theme=dark]{--bg:#050914;--card:#0d1729;--line:#1e3054;--txt:#eaf1ff;--mute:#9aaed0;--acc:#4cc9f0;--on:#04111f;--ok:#4ade80;--warn:#fbbf24;--hi:#ff7d8a;--chip:#16274a;--map:#1a2c4d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:88px}
+main{max-width:560px;margin:0 auto;padding:14px 16px}
+h1{font-size:1.5rem;margin:.2rem 0}h2{font-size:1.2rem;margin:.2rem 0}h3{font-size:1rem;margin:.6rem 0 .3rem}
+.mute{color:var(--mute)}.small{font-size:.82rem}
+.screen{display:none}.screen.on{display:block}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:.85rem;background:var(--chip);border-radius:12px;padding:8px 10px}
+.bar b{flex:1}
+button{font:inherit;border:0;cursor:pointer;border-radius:10px;padding:9px 13px;background:var(--acc);color:var(--on);font-weight:650}
+button.ghost{background:transparent;color:var(--mute);border:1px solid var(--line);padding:6px 10px;font-size:.85rem}
+button.cta{width:100%;margin-top:10px;padding:12px}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin:8px 0}
+.chip{background:var(--chip);color:var(--txt);border:1px solid var(--line);border-radius:999px;padding:7px 12px;font-weight:550;font-size:.88rem}
+.chip.on{background:var(--acc);color:var(--on);border-color:var(--acc)}
+label{display:block;font-size:.85rem;color:var(--mute);margin:10px 0 3px}
+input,select,textarea{width:100%;font:inherit;background:var(--bg);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:10px}
+input[type=range]{padding:0;accent-color:var(--acc)}
+.row{display:flex;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)}.row:last-child{border:0}.row>span:first-child{flex:1}
+.pill{font-size:.75rem;font-weight:700;padding:3px 9px;border-radius:999px;border:1px solid currentColor}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.hi{color:var(--hi)}
+.banner{border:2px solid var(--hi);color:var(--hi);border-radius:12px;padding:12px;margin:10px 0;font-weight:600}
+.advice{background:var(--chip);border-radius:12px;padding:10px;margin:8px 0}
+details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:8px 0}summary{cursor:pointer;font-weight:700}
+details ul{margin:.4rem 0;padding-left:18px}
+svg text{font-family:inherit}
+.mapwrap{display:flex;justify-content:center}.mapwrap svg{width:200px;max-width:60%}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding:6px 2px calc(6px + env(safe-area-inset-bottom,0px))}
+nav button{flex:1;background:none;color:var(--mute);padding:4px 0;font-size:.66rem;display:flex;flex-direction:column;align-items:center;gap:1px}
+nav button.on{color:var(--acc)}nav i{font-style:normal;font-size:1.15rem}
+#toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:var(--txt);color:var(--bg);padding:9px 15px;border-radius:999px;opacity:0;transition:opacity .25s;pointer-events:none;font-size:.88rem}#toast.show{opacity:1}
+</style></head><body>
+<main>
+<div class="bar" id="bar"></div>
+<section class="screen on" id="home"></section>
+<section class="screen" id="vitals"></section>
+<section class="screen" id="check"></section>
+<section class="screen" id="journal"></section>
+<section class="screen" id="trends"></section>
+<section class="screen" id="guide"></section>
+<section class="screen" id="backup"></section>
+</main>
+<nav>
+<button data-tab="home" class="on"><i>🏠</i>Home</button><button data-tab="vitals"><i>🩸</i>Vitals</button><button data-tab="check"><i>🧭</i>Check</button><button data-tab="journal"><i>📓</i>Journal</button><button data-tab="trends"><i>📈</i>Trends</button><button data-tab="guide"><i>📖</i>Guide</button><button data-tab="backup"><i>💾</i>Backup</button>
+</nav>
+<div id="toast" role="status"></div>
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const K="crewHealth.v3",MK=K+".mode";
+const SRC={self:"Self-reported",man:"Manual measurement",sim:"Simulated demo data"};
+const TASK={"":"Not stated",note:"I notice it",slow:"It slows my task",block:"I can’t do the task I need right now"};
+const R={sys:{n:"Blood pressure (systolic)",u:"mmHg",ok:[90,140],rev:[80,160],p:[40,300],s:1},glu:{n:"Blood sugar",u:"mg/dL",ok:[70,140],rev:[50,180],p:[20,600],s:1},bone:{n:"Bone density T-score",u:"",ok:[-1,99],rev:[-2.5,99],p:[-6,5],s:.1}};
+const LABEL={ok:"Within demo range",warn:"Review",hi:"Flagged",check:"Re-check value",none:"Not entered"};
+const AREAS={
+vision:{n:"Eyesight",why:"Trouble reading or focusing can come from the eyes. Long-duration crew have reported near-vision changes."},
+balance:{n:"Balance",why:"Dizziness and disorientation can come from the inner ear adapting to microgravity."},
+alert:{n:"Sleep & alertness",why:"Sleep that does not restore you can show up as lower alertness and trouble concentrating."},
+muscle:{n:"Muscle strength & endurance",why:"Muscles weaken without gravity loading, so strength and stamina are tracked."},
+bones:{n:"Bones (monitoring)",why:"Bone density is monitored because bone is lost without gravity loading."}};
+const KW={vision:/blur|vision|\beyes?\b|\bsee\b|seeing|double|squint|\btext\b/i,balance:/dizz|balance|orient|spin|vertigo|nause|queas|unsteady/i,alert:/sleep|slept|tired|alert|awake|fatigue|drows|concentrat|foggy|exhaust/i,muscle:/muscle|weak|strength|endurance|sore|stamina|cramp|\blegs?\b|\barms?\b/i};
+const AMB=/checklist|my place|\bread|procedure|screen/i;
+const EX=["I keep losing my place on the checklist","I slept seven hours but still feel less alert","My legs feel weak during exercise","The room spins when I turn my head"];
+
+let demo=false,D,sel=null,draft="";
+try{demo=localStorage.getItem(MK)==="demo"}catch(e){}
+const key=()=>demo?K+".demo":K;
+const blank=()=>({vitals:{sys:"",glu:"",bone:""},src:{sys:"self",glu:"self",bone:"self"},log:[],journal:[],mood:{s:5,m:6,a:4}});
+function demoData(){const d=blank(),n=Date.now(),day=864e5;d.vitals={sys:"165",glu:"95",bone:"-1.8"};d.src={sys:"sim",glu:"sim",bone:"sim"};
+[[6.5,4],[7,4],[6,3],[7.5,4],[7,2]].forEach((x,i)=>d.log.push({t:new Date(n-(4-i)*day).toISOString(),sleep:x[0],alert:x[1]}));return d}
+function norm(d){if(!d||typeof d!=="object")return null;const b=blank();
+["sys","glu","bone"].forEach(k=>{const v=parseFloat(d.vitals&&d.vitals[k]);b.vitals[k]=isFinite(v)?String(v):"";const s=d.src&&d.src[k];b.src[k]=SRC[s]?s:"self"});
+b.log=(Array.isArray(d.log)?d.log:[]).map(x=>({t:String(x.t||""),sleep:+x.sleep||0,alert:+x.alert||1})).slice(-60);
+b.journal=(Array.isArray(d.journal)?d.journal:[]).map(e=>({id:String(e.id||Math.random().toString(36).slice(2)),t:String(e.t||""),text:String(e.text||""),areas:(Array.isArray(e.areas)?e.areas:[]).filter(a=>AREAS[a]),base:(Array.isArray(e.base)?e.base:[]).filter(a=>AREAS[a]),kind:e.kind==="amb"||e.kind==="pick"?e.kind:"",ans:String(e.ans||""),measure:String(e.measure||""),recent:String(e.recent||""),task:TASK[e.task]!==undefined?e.task:"",src:SRC[e.src]?e.src:"self"}));
+const m=d.mood||{};b.mood={s:+m.s||5,m:+m.m||6,a:+m.a||4};return b}
+function save(){try{localStorage.setItem(key(),JSON.stringify(D))}catch(e){toast("Storage blocked. Download a backup.")}}
+function load(){let d=null;try{d=JSON.parse(localStorage.getItem(key()))}catch(e){}D=norm(d)||(demo?demoData():blank())}
+function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");clearTimeout(toast.i);toast.i=setTimeout(()=>t.classList.remove("show"),2200)}
+const when=t=>t?new Date(t).toLocaleString([], {dateStyle:"medium",timeStyle:"short"}):"";
+
+/* vitals + status summary */
+function grade(k,v){const r=R[k];if(v>=r.ok[0]&&v<=r.ok[1])return"ok";if(v>=r.rev[0]&&v<=r.rev[1])return"warn";return"hi"}
+function status(){return Object.keys(R).map(k=>{const raw=D.vitals[k];if(raw==="")return{k,g:"none"};const v=parseFloat(raw);if(!isFinite(v)||v<R[k].p[0]||v>R[k].p[1])return{k,v,g:"check"};return{k,v,g:grade(k,v)}})}
+function summary(){const r=status(),c=g=>r.filter(x=>x.g===g).length;
+const parts=[[c("hi"),"flagged"],[c("warn"),"to review"],[c("ok"),"within demo range"],[c("check"),"to re-check"],[c("none"),"not entered"]].filter(p=>p[0]).map(p=>p[0]+" "+p[1]);
+return c("none")===r.length?"No readings entered":parts.join(" · ")}
+
+/* symptoms */
+function classify(t){const a=Object.keys(KW).filter(k=>KW[k].test(t));const amb=AMB.test(t)&&!a.includes("alert")&&!(a.includes("vision")&&/blur/i.test(t));return{a,amb}}
+function addEntry(text){const c=classify(text),base=c.a.filter(x=>x!=="vision"&&x!=="alert");
+const e={id:Date.now().toString(36),t:new Date().toISOString(),text,areas:c.amb?base:c.a,base:c.amb?base:[],kind:c.amb?"amb":(c.a.length?"":"pick"),ans:"",measure:"",recent:"",task:"",src:"self"};
+D.journal.unshift(e);save();return e}
+const opts=e=>e.kind==="amb"?[["blur","Blurry text"],["conc","Hard to concentrate"],["both","Both"]]:[["vision","Eyesight"],["balance","Balance"],["alert","Sleep & alertness"],["muscle","Muscle strength"],["none","Not sure"]];
+function answer(e,k){e.ans=k;const m={blur:["vision"],conc:["alert"],both:["vision","alert"],none:[]};e.areas=[...new Set((e.base||[]).concat(m[k]||[k]))]}
+const label=e=>{const o=opts(e).find(x=>x[0]===e.ans);return o?o[1]:""};
+function clar(e){if(!e.kind)return"";const q=e.kind==="amb"?"Is the text blurry, is it hard to concentrate, or both?":"Which area feels closest?";
+return`<div class="advice"><b>${q}</b><div class="chips">${opts(e).map(o=>`<button class="chip${e.ans===o[0]?" on":""}" data-ans="${e.id}|${o[0]}">${o[1]}</button>`).join("")}</div><span class="small mute">You can change this answer at any time.</span></div>`}
+function missing(e){const m=[];if(e.kind&&!e.ans)m.push("which area");if(!e.measure)m.push("measurement");if(!e.recent)m.push("what changed recently");if(!e.task)m.push("effect on task");return m}
+const reports=r=>D.journal.filter(e=>e.areas.includes(r));
+
+/* map */
+function mapSvg(){const f=r=>{const n=reports(r).length+(r==="bones"&&D.vitals.bone!==""?1:0);return`data-r="${r}" role="button" aria-label="${AREAS[r].n}" style="fill:${n?"var(--acc)":"var(--map)"};stroke:${sel===r?"var(--txt)":"var(--line)"};stroke-width:${sel===r?3.5:1.5};cursor:pointer"`};
+return`<svg viewBox="0 0 200 330" aria-label="Body map"><circle cx="100" cy="50" r="27" style="fill:var(--map);stroke:var(--line);stroke-width:1.5"/>
+<g ${f("alert")}><ellipse cx="100" cy="22" rx="20" ry="10"/></g>
+<g ${f("vision")}><ellipse cx="90" cy="48" rx="7" ry="5"/><ellipse cx="110" cy="48" rx="7" ry="5"/></g>
+<g ${f("balance")}><circle cx="71" cy="52" r="7"/><circle cx="129" cy="52" r="7"/></g>
+<g ${f("bones")}><rect x="76" y="82" width="48" height="100" rx="16"/></g>
+<g ${f("muscle")}><rect x="42" y="84" width="24" height="96" rx="11"/><rect x="134" y="84" width="24" height="96" rx="11"/><rect x="76" y="190" width="22" height="130" rx="11"/><rect x="102" y="190" width="22" height="130" rx="11"/></g></svg>`}
+function detail(){if(!sel)return`<p class="mute">Tap an area on the map, or pick one below, to see why it is marked.</p>`;
+const A=AREAS[sel],L=reports(sel);let h=`<h3>${A.n}</h3>`,has=L.length>0;
+if(sel==="bones"&&D.vitals.bone!==""){const s=status().find(x=>x.k==="bone");has=true;h+=`<p>Latest bone T-score: ${esc(D.vitals.bone)} (${LABEL[s.g]}, ${SRC[D.src.bone]}).</p>`}
+h+=L.map(e=>`<p>Marked because you wrote “${esc(e.text)}”${e.ans?` and chose “${esc(label(e))}”`:""}.${e.task?" Effect on task: "+esc(TASK[e.task])+".":""}</p>`).join("");
+if(!has)h+=`<p><b>No information recorded.</b></p>`;
+return h+`<p class="mute small">${A.why}</p>`}
+const regionChips=()=>`<div class="chips">${Object.keys(AREAS).map(r=>`<button class="chip${sel===r?" on":""}" data-r="${r}">${AREAS[r].n}</button>`).join("")}</div>`;
+
+/* renders */
+function renderBar(){$("#bar").innerHTML=`<b>Data: ${demo?"Demo case (fictional astronaut)":"Your saved entries"}</b><button class="ghost" id="mode">${demo?"Use my data":"Try demo case"}</button>${demo?`<button class="ghost" id="rst">Reset demo</button>`:""}`}
+function renderHome(){const rows=status(),hot=rows.filter(r=>r.g==="hi"),open=D.journal.filter(e=>e.kind&&!e.ans).length,L=D.log[D.log.length-1];
+$("#home").innerHTML=`<h1>Hello, crew member</h1>
+${hot.length?`<div class="banner">Flagged: ${hot.map(r=>R[r.k].n+" "+r.v+" "+R[r.k].u).join(", ")}. Contact your flight surgeon now.</div>`:""}
+<div class="card"><h2>Reading status</h2><p style="font-size:1.1rem;margin:.3rem 0"><b>${summary()}</b></p><p class="mute small">Ranges are demo placeholders. Missing readings are never counted as normal.</p></div>
+<div class="card"><h2>Concerns</h2><p>${D.journal.length} in your journal${open?`, ${open} with an unanswered question`:""}.</p>${L?`<p class="mute small">Latest check-in: ${L.sleep} h sleep, alertness ${L.alert}/5.</p>`:""}<button class="cta" data-tab="check">Describe a symptom</button></div>`}
+function renderVitals(){const rows=status();
+$("#vitals").innerHTML=`<h2>Blood, sugar &amp; bones</h2><p class="mute small">Demo ranges only. Your mission medical team sets the real limits.</p>
+<div class="card">${Object.keys(R).map(k=>`<label for="in_${k}">${R[k].n}${R[k].u?" ("+R[k].u+")":""}</label><input id="in_${k}" type="number" step="${R[k].s}" inputmode="decimal" value="${esc(D.vitals[k])}" placeholder="Enter reading"><label for="sr_${k}">Source of this reading</label><select id="sr_${k}">${Object.keys(SRC).map(s=>`<option value="${s}"${D.src[k]===s?" selected":""}>${SRC[s]}</option>`).join("")}</select>`).join("")}<button class="cta" id="saveV">Update status</button></div>
+<div class="card"><p><b>${summary()}</b></p>${rows.map(r=>`<div class="row"><span>${R[r.k].n}${r.g!=="none"?`<br><small class="mute">${SRC[D.src[r.k]]}</small>`:""}</span>${r.v!==undefined?`<b>${r.v} ${R[r.k].u}</b>`:""}<span class="pill ${r.g==="check"?"warn":r.g==="none"?"mute":r.g}">${LABEL[r.g]}</span></div>`).join("")}${rows.some(r=>r.g==="check")?`<p class="warn small">A value looks implausible. Check it for a typing error.</p>`:""}</div>`}
+function renderCheck(){const e=D.journal[0];
+$("#check").innerHTML=`<h2>Describe a symptom</h2><p class="mute small">Write it in your own words, or tap an example.</p>
+<div class="card"><textarea id="sx" rows="3" placeholder="e.g. I keep losing my place on the checklist">${esc(draft)}</textarea><div class="chips">${EX.map((x,i)=>`<button class="chip" data-ex="${i}">${esc(x)}</button>`).join("")}</div><button class="cta" id="addSx">Add to journal</button></div>
+${e?`<div class="card"><p class="mute small">Latest entry</p><p><b>“${esc(e.text)}”</b></p>${clar(e)}<p class="small">${e.areas.length?"Marked: "+e.areas.map(a=>AREAS[a].n).join(", "):"No area marked yet."} <a href="#journal" data-tab="journal">Add details in Journal</a></p></div>`:""}
+<div class="card"><h3>Body map</h3><div class="mapwrap">${mapSvg()}</div>${regionChips()}${detail()}</div>`}
+function entryCard(e){const m=missing(e);
+return`<div class="card"><small class="mute">${esc(when(e.t))} · ${e.areas.length?e.areas.map(a=>AREAS[a].n).join(", "):"No area chosen yet"}</small><p style="margin:.3rem 0"><b>“${esc(e.text)}”</b></p>${clar(e)}
+<label>Measurement (optional)</label><input data-f="measure" data-id="${e.id}" value="${esc(e.measure)}" placeholder="e.g. read 3 lines in 2 minutes">
+<label>What changed recently</label><input data-f="recent" data-id="${e.id}" value="${esc(e.recent)}" placeholder="e.g. new task, less sleep">
+<label>Effect on task</label><select data-f="task" data-id="${e.id}">${Object.keys(TASK).map(k=>`<option value="${k}"${e.task===k?" selected":""}>${TASK[k]}</option>`).join("")}</select>
+<label>Where this came from</label><select data-f="src" data-id="${e.id}">${Object.keys(SRC).map(k=>`<option value="${k}"${e.src===k?" selected":""}>${SRC[k]}</option>`).join("")}</select>
+<p class="small ${m.length?"warn":"ok"}">${m.length?"Missing: "+m.join(", ")+". Entry still saved.":"Nothing missing."}</p><button class="ghost" data-del="${e.id}">Delete entry</button></div>`}
+function renderJournal(){$("#journal").innerHTML=`<h2>Evidence journal</h2><p class="mute small">Each entry keeps what you said, any measurement, and what changed. Edit any answer.</p>
+${D.journal.length?D.journal.map(entryCard).join(""):`<div class="card"><p class="mute">No entries yet. Describe a symptom in Check.</p></div>`}
+<button class="cta" id="mkHo">Create handoff summary</button><textarea id="ho" rows="12" style="margin-top:10px;display:none" readonly></textarea><button class="cta" id="cpHo" style="display:none">Copy summary</button>`}
+function handoff(){const L=["CREW HEALTH HANDOFF ("+(demo?"demo case, fictional":"saved entries")+")","Created: "+new Date().toLocaleString(),"","Readings: "+summary()+" (demo ranges, not clinical limits)"];
+status().forEach(r=>{if(r.g!=="none")L.push("- "+R[r.k].n+": "+(r.v===undefined?"invalid":r.v+" "+R[r.k].u)+" ["+LABEL[r.g]+", "+SRC[D.src[r.k]]+"]")});
+L.push("");if(!D.journal.length)L.push("No symptoms reported.");
+D.journal.forEach((e,i)=>{L.push("Concern "+(i+1)+": \""+e.text+"\"","  Started/reported: "+when(e.t),"  Areas: "+(e.areas.length?e.areas.map(a=>AREAS[a].n).join(", "):"not determined"),"  Effect on task: "+TASK[e.task]+(e.task==="block"?"  <-- cannot do needed task":""),"  Measurement: "+(e.measure||"none recorded"),"  Recent change: "+(e.recent||"none recorded"),"  Source: "+SRC[e.src],"  Still unknown: "+(missing(e).join(", ")||"nothing"),"")});
+L.push("Guidance only, not a diagnosis.");return L.join("\n")}
+function chart(){const L=D.log.slice(-7);if(!L.length)return`<p class="mute">No check-ins yet.</p>`;const W=320,bw=W/L.length;let b="",p=[];
+L.forEach((x,i)=>{const h=Math.min(x.sleep,10)/10*100,cx=i*bw+bw/2,d=new Date(x.t),ay=115-(x.alert-1)/4*100;
+b+=`<rect x="${cx-bw*.3}" y="${115-h}" width="${bw*.6}" height="${h}" rx="4" style="fill:var(--acc);opacity:.45"/><text x="${cx}" y="${112-h}" text-anchor="middle" font-size="10" style="fill:var(--txt)">${x.sleep}h</text><text x="${cx}" y="132" text-anchor="middle" font-size="10" style="fill:var(--mute)">${d.getDate()}/${d.getMonth()+1}</text>`;p.push([cx,ay])});
+return`<svg viewBox="0 0 ${W} 140" width="100%" role="img" aria-label="Sleep hours as bars, alertness as a line">${b}<polyline points="${p.map(q=>q.join(",")).join(" ")}" style="fill:none;stroke:var(--hi);stroke-width:2.5"/>${p.map(q=>`<circle cx="${q[0]}" cy="${q[1]}" r="3.5" style="fill:var(--hi)"/>`).join("")}</svg><p class="small mute">Bars: sleep hours. Line: alertness (1 low to 5 high).</p>`}
+function insight(){const L=D.log;if(L.length<2)return"Add at least two check-ins to compare days.";const t=L[L.length-1],p=L.slice(0,-1).slice(-6),av=k=>p.reduce((a,x)=>a+x[k],0)/p.length,ds=t.sleep-av("sleep"),da=t.alert-av("alert");
+return`Latest: ${t.sleep} h sleep, alertness ${t.alert}/5. Earlier average: ${av("sleep").toFixed(1)} h, ${av("alert").toFixed(1)}/5.`+(ds>=-.5&&da<=-1?" Sleep time held steady but alertness dropped, which a sleep counter alone would miss.":"")}
+function moodMsg(){const m=D.mood;return m.s>=7||m.a>=7?"Today feels heavy. You don’t have to carry it alone. Please share it with your support team.":"Thank you for checking in."}
+function renderTrends(){const m=D.mood;
+$("#trends").innerHTML=`<h2>Trends</h2><div class="card">${chart()}<p><b>${insight()}</b></p></div>
+<div class="card"><h3>Add today’s check-in</h3><label for="tsl">Hours slept</label><input id="tsl" type="number" min="0" max="16" step="0.5" inputmode="decimal" placeholder="e.g. 7"><label for="tal">Alertness today</label><select id="tal">${[1,2,3,4,5].map(n=>`<option value="${n}"${n===3?" selected":""}>${n}${n===1?" (very low)":n===5?" (very alert)":""}</option>`).join("")}</select><button class="cta" id="addLog">Save check-in</button></div>
+<div class="card"><h3>Mood &amp; stress</h3>${[["s","Stress"],["m","Mood"],["a","Anxiety"]].map(([k,n])=>`<label>${n} (1–10): <b id="v_${k}">${m[k]}</b></label><input type="range" min="1" max="10" value="${m[k]}" data-mood="${k}">`).join("")}<p id="mm" class="${m.s>=7||m.a>=7?"warn":"ok"}">${moodMsg()}</p></div>`}
+const GUIDE=[
+["Vision changes",["Rest your eyes and note when blurriness began.","Report near-vision changes early; they are tracked on long missions."],"NASA Human Research Program: Spaceflight Associated Neuro-ocular Syndrome (SANS)"],
+["Balance & motion sickness",["Move slowly, fix your gaze on a steady point, use handholds.","Report symptoms that last several days or limit tasks."],"NASA Human Research Program: sensorimotor and space motion sickness research"],
+["Sleep & alertness",["Keep a regular schedule and log hours with alertness.","Report low alertness that persists after enough sleep."],"NASA Human Research Program: sleep loss and circadian desynchronization risk"],
+["Muscle strength & endurance",["Follow the prescribed resistance and aerobic exercise plan.","Report unusual weakness or pain."],"NASA Human Research Program: exercise countermeasures and muscle mass, strength, endurance risk"],
+["Space radiation (monitoring)",["Move to the most shielded area during solar particle events.","Track cumulative dose with your medical team."],"NASA Human Research Program: Space Radiation Element"],
+["Bone density (monitoring)",["Follow your resistance exercise plan; keep calcium and vitamin D as prescribed.","Report bone or joint pain."],"NASA Human Research Program: bone fracture risk from spaceflight"]];
+function renderGuide(){$("#guide").innerHTML=`<h2>Offline guide</h2><p class="mute small">Stored in this page, no connection needed. Short summaries written for this demo; check the named NASA sources and your flight surgeon for real guidance.</p>${GUIDE.map(g=>`<details><summary>${g[0]}</summary><ul>${g[1].map(x=>`<li>${x}</li>`).join("")}</ul><p class="small mute">Source: ${g[2]}</p></details>`).join("")}`}
+function renderBackup(){$("#backup").innerHTML=`<h2>Backup &amp; recovery</h2><p class="mute small">Data saves automatically in this browser. Keep a backup file too.</p><div class="card"><button class="cta" id="exp">Download backup file</button><label for="imp">Restore from a backup file</label><input type="file" id="imp" accept="application/json"><p class="small mute" id="bk"></p></div>`}
+function renderAll(){renderBar();renderHome();renderVitals();renderCheck();renderJournal();renderTrends();renderGuide();renderBackup()}
+function show(t){document.querySelectorAll(".screen").forEach(s=>s.classList.toggle("on",s.id===t));document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.tab===t));window.scrollTo(0,0)}
+
+/* events */
+document.addEventListener("click",ev=>{const t=ev.target,q=a=>t.closest("["+a+"]");let b;
+if(b=q("data-tab")){ev.preventDefault();show(b.dataset.tab);return}
+if(b=q("data-ex")){draft=EX[+b.dataset.ex];renderCheck();return}
+if(b=q("data-ans")){const[id,k]=b.dataset.ans.split("|"),e=D.journal.find(x=>x.id===id);if(e){answer(e,k);save();renderAll()}return}
+if(b=q("data-r")){sel=b.dataset.r;renderCheck();return}
+if(b=q("data-del")){D.journal=D.journal.filter(x=>x.id!==b.dataset.del);save();renderAll();return}
+switch(t.id){
+case"mode":save();demo=!demo;try{localStorage.setItem(MK,demo?"demo":"real")}catch(e){}load();sel=null;renderAll();toast(demo?"Demo case loaded":"Back to your data");break;
+case"rst":D=demoData();save();sel=null;renderAll();toast("Demo reset");break;
+case"saveV":for(const k of Object.keys(R)){D.vitals[k]=$("#in_"+k).value;D.src[k]=$("#sr_"+k).value}D=norm(D);save();renderAll();toast("Status updated");if(navigator.vibrate&&status().some(r=>r.g==="hi"))navigator.vibrate([300,150,300]);break;
+case"addSx":{const v=$("#sx").value.trim();if(!v){toast("Write a few words first");break}draft="";addEntry(v);renderAll();show("check");break}
+case"mkHo":$("#ho").value=handoff();$("#ho").style.display="block";$("#cpHo").style.display="block";break;
+case"cpHo":{const h=$("#ho");h.select();(navigator.clipboard?navigator.clipboard.writeText(h.value):Promise.reject()).then(()=>toast("Copied"),()=>{try{document.execCommand("copy");toast("Copied")}catch(e){toast("Select the text and copy it")}});break}
+case"addLog":{const s=parseFloat($("#tsl").value);if(!isFinite(s)||s<0||s>16){toast("Enter hours between 0 and 16");break}D.log.push({t:new Date().toISOString(),sleep:s,alert:+$("#tal").value});save();renderAll();break}
+case"exp":{const u=URL.createObjectURL(new Blob([JSON.stringify(D,null,2)],{type:"application/json"}));const a=Object.assign(document.createElement("a"),{href:u,download:"crew-health-backup.json"});a.click();URL.revokeObjectURL(u);$("#bk").textContent="Backup downloaded.";break}}});
+document.addEventListener("input",ev=>{const t=ev.target;
+if(t.id==="sx")draft=t.value;
+if(t.dataset.mood){D.mood[t.dataset.mood]=+t.value;$("#v_"+t.dataset.mood).textContent=t.value;const p=$("#mm");p.textContent=moodMsg();p.className=D.mood.s>=7||D.mood.a>=7?"warn":"ok";save()}});
+document.addEventListener("change",async ev=>{const t=ev.target;
+if(t.dataset.f){const e=D.journal.find(x=>x.id===t.dataset.id);if(e){e[t.dataset.f]=t.value;save();renderAll()}return}
+if(t.id==="imp"){const f=t.files[0];if(!f)return;try{const d=norm(JSON.parse(await f.text()));if(!d)throw 0;D=d;save();renderAll();$("#bk").textContent="Backup restored."}catch(e){$("#bk").textContent="That file could not be read. Use a backup made by this page."}}});
+load();renderAll();
+</script></body></html>
