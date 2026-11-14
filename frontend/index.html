@@ -72,6 +72,71 @@ const KW={vision:/blur|vision|\beyes?\b|\bsee\b|seeing|double|squint|\btext\b/i,
 const AMB=/checklist|my place|\bread|procedure|screen/i;
 const EX=["I keep losing my place on the checklist","I slept seven hours but still feel less alert","My legs feel weak during exercise","The room spins when I turn my head"];
 
+/* ---------- Backend sync (new) ----------
+   The rest of this file is unchanged from the original build. This block
+   makes the server the durable source of truth when it's reachable, while
+   keeping localStorage as an instant local cache so the UI never blocks
+   on the network and still works offline. Demo mode never touches the
+   network — it's a local-only sandbox, same as before. */
+const API="";                 // same origin: this server also serves this page
+let online=true;
+let _syncT=null;
+
+function isBlankState(s){
+  return !!s && s.journal.length===0 && s.log.length===0 &&
+    s.vitals.sys===""&&s.vitals.glu===""&&s.vitals.bone==="";
+}
+async function pushToServer(silent){
+  try{
+    const r=await fetch(`${API}/api/state?crew_id=1`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(D)});
+    if(!r.ok)throw new Error("bad status");
+    const wasOffline=!online;online=true;
+    if(wasOffline&&!silent)toast("Back online — synced to server");
+  }catch(e){
+    const wasOnline=online;online=false;
+    if(wasOnline&&!silent)toast("Offline — saved on this device only");
+  }
+  if(!demo)renderBar();
+}
+async function pullFromServer(){
+  try{
+    const r=await fetch(`${API}/api/state?crew_id=1`);
+    if(!r.ok)throw new Error("bad status");
+    const raw=await r.json();
+    online=true;
+    return norm(raw);
+  }catch(e){
+    online=false;
+    return null;
+  }
+}
+function queueSync(){clearTimeout(_syncT);_syncT=setTimeout(()=>pushToServer(false),400)}
+async function reconcile(){
+  if(demo)return;
+  const server=await pullFromServer();
+  if(server===null){renderAll();return} // offline: keep the local cache as-is
+  if(isBlankState(server)&&!isBlankState(D)){
+    await pushToServer(true);           // fresh server, this browser already has data: seed it
+  }else{
+    D=server;                           // server has data: it is the source of truth
+    try{localStorage.setItem(key(),JSON.stringify(D))}catch(e){}
+    sel=null;
+  }
+  renderAll();
+}
+/* Light polling so a second tab/device's changes show up here without a
+   manual reload. Paused while the tab isn't visible, and never runs in
+   demo mode. */
+setInterval(()=>{
+  if(demo||document.visibilityState!=="visible")return;
+  pullFromServer().then(server=>{
+    if(server&&JSON.stringify(server)!==JSON.stringify(D)){
+      D=server;try{localStorage.setItem(key(),JSON.stringify(D))}catch(e){}sel=null;renderAll();
+    }
+  });
+},15000);
+/* ---------- end backend sync block ---------- */
+
 let demo=false,D,sel=null,draft="";
 try{demo=localStorage.getItem(MK)==="demo"}catch(e){}
 const key=()=>demo?K+".demo":K;
@@ -83,7 +148,7 @@ function norm(d){if(!d||typeof d!=="object")return null;const b=blank();
 b.log=(Array.isArray(d.log)?d.log:[]).map(x=>({t:String(x.t||""),sleep:+x.sleep||0,alert:+x.alert||1})).slice(-60);
 b.journal=(Array.isArray(d.journal)?d.journal:[]).map(e=>({id:String(e.id||Math.random().toString(36).slice(2)),t:String(e.t||""),text:String(e.text||""),areas:(Array.isArray(e.areas)?e.areas:[]).filter(a=>AREAS[a]),base:(Array.isArray(e.base)?e.base:[]).filter(a=>AREAS[a]),kind:e.kind==="amb"||e.kind==="pick"?e.kind:"",ans:String(e.ans||""),measure:String(e.measure||""),recent:String(e.recent||""),task:TASK[e.task]!==undefined?e.task:"",src:SRC[e.src]?e.src:"self"}));
 const m=d.mood||{};b.mood={s:+m.s||5,m:+m.m||6,a:+m.a||4};return b}
-function save(){try{localStorage.setItem(key(),JSON.stringify(D))}catch(e){toast("Storage blocked. Download a backup.")}}
+function save(){try{localStorage.setItem(key(),JSON.stringify(D))}catch(e){toast("Storage blocked. Download a backup.")}if(!demo)queueSync()}
 function load(){let d=null;try{d=JSON.parse(localStorage.getItem(key()))}catch(e){}D=norm(d)||(demo?demoData():blank())}
 function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");clearTimeout(toast.i);toast.i=setTimeout(()=>t.classList.remove("show"),2200)}
 const when=t=>t?new Date(t).toLocaleString([], {dateStyle:"medium",timeStyle:"short"}):"";
@@ -125,7 +190,9 @@ return h+`<p class="mute small">${A.why}</p>`}
 const regionChips=()=>`<div class="chips">${Object.keys(AREAS).map(r=>`<button class="chip${sel===r?" on":""}" data-r="${r}">${AREAS[r].n}</button>`).join("")}</div>`;
 
 /* renders */
-function renderBar(){$("#bar").innerHTML=`<b>Data: ${demo?"Demo case (fictional astronaut)":"Your saved entries"}</b><button class="ghost" id="mode">${demo?"Use my data":"Try demo case"}</button>${demo?`<button class="ghost" id="rst">Reset demo</button>`:""}`}
+function renderBar(){
+const syncPill=demo?"":`<span class="pill ${online?"ok":"warn"}">${online?"● Synced":"● Offline (local only)"}</span>`;
+$("#bar").innerHTML=`<b>Data: ${demo?"Demo case (fictional astronaut)":"Your saved entries"}</b>${syncPill}<button class="ghost" id="mode">${demo?"Use my data":"Try demo case"}</button>${demo?`<button class="ghost" id="rst">Reset demo</button>`:""}`}
 function renderHome(){const rows=status(),hot=rows.filter(r=>r.g==="hi"),open=D.journal.filter(e=>e.kind&&!e.ans).length,L=D.log[D.log.length-1];
 $("#home").innerHTML=`<h1>Hello, crew member</h1>
 ${hot.length?`<div class="banner">Flagged: ${hot.map(r=>R[r.k].n+" "+r.v+" "+R[r.k].u).join(", ")}. Contact your flight surgeon now.</div>`:""}
@@ -174,7 +241,7 @@ const GUIDE=[
 ["Space radiation (monitoring)",["Move to the most shielded area during solar particle events.","Track cumulative dose with your medical team."],"NASA Human Research Program: Space Radiation Element"],
 ["Bone density (monitoring)",["Follow your resistance exercise plan; keep calcium and vitamin D as prescribed.","Report bone or joint pain."],"NASA Human Research Program: bone fracture risk from spaceflight"]];
 function renderGuide(){$("#guide").innerHTML=`<h2>Offline guide</h2><p class="mute small">Stored in this page, no connection needed. Short summaries written for this demo; check the named NASA sources and your flight surgeon for real guidance.</p>${GUIDE.map(g=>`<details><summary>${g[0]}</summary><ul>${g[1].map(x=>`<li>${x}</li>`).join("")}</ul><p class="small mute">Source: ${g[2]}</p></details>`).join("")}`}
-function renderBackup(){$("#backup").innerHTML=`<h2>Backup &amp; recovery</h2><p class="mute small">Data saves automatically in this browser. Keep a backup file too.</p><div class="card"><button class="cta" id="exp">Download backup file</button><label for="imp">Restore from a backup file</label><input type="file" id="imp" accept="application/json"><p class="small mute" id="bk"></p></div>`}
+function renderBackup(){$("#backup").innerHTML=`<h2>Backup &amp; recovery</h2><p class="mute small">${demo?"Demo data stays on this device only.":"Your data saves automatically here and on the server, so it survives a cleared browser or a new device. Keep a backup file too, for moving data between servers."}</p><div class="card"><button class="cta" id="exp">Download backup file</button><label for="imp">Restore from a backup file</label><input type="file" id="imp" accept="application/json"><p class="small mute" id="bk"></p></div>${demo?"":`<div class="card"><p class="small mute">Server backup, straight from the database: <a href="/api/backup?crew_id=1" target="_blank" rel="noopener">/api/backup?crew_id=1</a></p></div>`}`}
 function renderAll(){renderBar();renderHome();renderVitals();renderCheck();renderJournal();renderTrends();renderGuide();renderBackup()}
 function show(t){document.querySelectorAll(".screen").forEach(s=>s.classList.toggle("on",s.id===t));document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.tab===t));window.scrollTo(0,0)}
 
@@ -186,7 +253,7 @@ if(b=q("data-ans")){const[id,k]=b.dataset.ans.split("|"),e=D.journal.find(x=>x.i
 if(b=q("data-r")){sel=b.dataset.r;renderCheck();return}
 if(b=q("data-del")){D.journal=D.journal.filter(x=>x.id!==b.dataset.del);save();renderAll();return}
 switch(t.id){
-case"mode":save();demo=!demo;try{localStorage.setItem(MK,demo?"demo":"real")}catch(e){}load();sel=null;renderAll();toast(demo?"Demo case loaded":"Back to your data");break;
+case"mode":save();demo=!demo;try{localStorage.setItem(MK,demo?"demo":"real")}catch(e){}load();sel=null;renderAll();toast(demo?"Demo case loaded":"Back to your data");if(!demo)reconcile();break;
 case"rst":D=demoData();save();sel=null;renderAll();toast("Demo reset");break;
 case"saveV":for(const k of Object.keys(R)){D.vitals[k]=$("#in_"+k).value;D.src[k]=$("#sr_"+k).value}D=norm(D);save();renderAll();toast("Status updated");if(navigator.vibrate&&status().some(r=>r.g==="hi"))navigator.vibrate([300,150,300]);break;
 case"addSx":{const v=$("#sx").value.trim();if(!v){toast("Write a few words first");break}draft="";addEntry(v);renderAll();show("check");break}
@@ -201,4 +268,5 @@ document.addEventListener("change",async ev=>{const t=ev.target;
 if(t.dataset.f){const e=D.journal.find(x=>x.id===t.dataset.id);if(e){e[t.dataset.f]=t.value;save();renderAll()}return}
 if(t.id==="imp"){const f=t.files[0];if(!f)return;try{const d=norm(JSON.parse(await f.text()));if(!d)throw 0;D=d;save();renderAll();$("#bk").textContent="Backup restored."}catch(e){$("#bk").textContent="That file could not be read. Use a backup made by this page."}}});
 load();renderAll();
+reconcile();
 </script></body></html>
