@@ -1,135 +1,161 @@
-# Crew Health Companion — full stack
+# Crew Health Companion
 
-Three tiers, wired together and tested:
+> **2026 NASA Space Apps Challenge** — *Create Health Monitoring Software for Astronauts on Space Missions*
 
-- **Frontend** — `frontend/index.html`. Your existing v3 build (body map, evidence
-  journal, trends chart, handoff summary, offline guide, backup/restore), unchanged
-  except for its data layer, which now syncs with the server.
-- **Backend** — `backend/server.py`. A REST API, zero third-party dependencies.
-- **Database** — `backend/schema.sql`, a normalized SQLite schema, created automatically
-  as `backend/crew_health.db` on first run.
+**Crew Health Companion** is an offline-first, self-assessment and health-monitoring tool designed for astronauts on long-duration spaceflight missions. Built with zero external runtime dependencies, it empowers crew members to log physiological vitals, evaluate symptoms through an interactive anatomical body map, manage mission nutrition schedules, track sleep and behavioral trends, and account for deep-space communication delays when coordinating with ground flight surgeons.
 
-## Run it
+---
 
-Requires only Python 3 (no `pip install`, no Node, no Docker):
+## Table of Contents
 
-```bash
-cd backend
-python3 server.py
+- [Challenge Context & Problem Statement](#challenge-context--problem-statement)
+- [Key Features](#key-features)
+- [Mapping to NASA's 5 Hazards of Human Spaceflight](#mapping-to-nasas-5-hazards-of-human-spaceflight)
+- [Architecture & Tech Stack](#architecture--tech-stack)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [API Reference](#api-reference)
+- [Data Privacy & Disclaimers](#data-privacy--disclaimers)
+
+---
+
+## Challenge Context & Problem Statement
+
+As human exploration pushes beyond Low Earth Orbit toward the Moon (Artemis) and Mars, crews face prolonged exposure to space radiation, microgravity, isolation, closed habitats, and significant communication delays with Earth. Because real-time ground support is not always possible, astronauts must be equipped to monitor, assess, and act on their own physical and behavioral health.
+
+**Crew Health Companion** addresses this challenge by providing:
+- **At-a-glance status interpretation** with color-coded gauges (`Within demo range`, `Review`, `Flagged / Outside range`).
+- **Guided self-assessment** that never assumes prior medical expertise, offering step-by-step measurement instructions (e.g., resting blood pressure protocols) and clarifying questions.
+- **Autonomous decision support** that respects mission schedules and communication latency without taking unprompted actions.
+
+---
+
+## Key Features
+
+### 1. Mission Dashboard & Actionable Next Steps (`Home`)
+- **Smart Triage (`Next Action`):** Dynamically prioritizes what needs attention—whether an unlogged meal with an open schedule gap, an ambiguous symptom needing clarification, or an out-of-range vital sign.
+- **Daily Checklist (`Still to do`):** Tracks daily blood pressure, blood sugar, sleep check-ins, and meal logs.
+- **Interactive Demo Case:** Includes a one-click **Try demo case** mode pre-populated with a fictional astronaut's telemetry, meal logs, history, and simulated escalation banners.
+
+### 2. Physiological Vitals Monitoring (`Vitals`)
+- Tracks key spaceflight indicators: **Blood Pressure (Systolic/Diastolic)**, **Heart Rate**, **Core Body Temperature**, **Blood Sugar (mg/dL)**, and **Bone Density T-score**.
+- Visual range gauges with source attribution (`Self-reported`, `Manual measurement`, `Simulated demo data`) and plausibility checks to catch entry errors.
+- Built-in **How to measure** step-by-step protocol guides.
+
+### 3. Interactive Body Map & Symptom Check (`Check`)
+- **Natural-Language Symptom Parsing:** Crew members describe symptoms in plain text (e.g., *"I keep losing my place on the checklist"*). Ambiguous inputs trigger a single clarifying question rather than guessing a diagnosis.
+- **Clickable Anatomical Figure:** Highlights affected regions (**Vision**, **Balance**, **Sleep & Alertness**, **Muscle Strength & Endurance**, **Bones**) and explains the spaceflight physiology behind each system.
+
+### 4. Evidence Journal & Medical Handoff (`Journal`)
+- Structured longitudinal tracking for each reported concern: measurements, recent environmental/task changes, operational impact (`I notice it`, `It slows my task`, `I can't do the task`), and timestamped **Follow-up** timelines (`Better`, `About the same`, `Worse`).
+- **Plain-Text Flight Surgeon Handoff:** Generates a clean, copyable summary of vitals, recent meals, and active concerns ready for transmission over mission comms.
+
+### 5. Deep-Space Communication Delay & Medical Support Modal
+- Calculates expected turnaround times based on **one-way signal delay** and **team review time** (configurable for LEO/ISS, Lunar, or Mars transit scenarios), displaying an exact timeline from transmission to expected reply.
+
+### 6. Adaptive Diet & Schedule Planner (`Diet Plan`)
+- Tracks daily meals (`Breakfast`, `Lunch`, `Dinner`) alongside a timeline of mission tasks (exercise, science experiments, station maintenance, ground calls).
+- **Non-Intrusive Rescheduling:** When a meal is marked *Missed*, the scheduler finds the earliest free 30-minute gap that maintains a 90-minute buffer from other meals without moving mission tasks—allowing the astronaut to *Accept*, *Keep original*, or *Dismiss*.
+- Filters a mission menu by saved dietary restrictions (`No dairy`, `No gluten`, `No nuts`, `No eggs`, `Vegetarian`) and preferences (`Savory`, `Sweet`, `Light`).
+
+### 7. Behavioral Health & Circadian Trends (`Trends`)
+- Dual-axis SVG chart plotting **Sleep Hours** against **Alertness (1–5)** to detect hidden fatigue (e.g., steady sleep hours accompanied by dropping alertness).
+- Interactive sliders for daily **Stress**, **Mood**, and **Anxiety (1–10)** with supportive prompts when stress or anxiety thresholds are elevated.
+
+### 8. Medical History, Offline Reference Guide & Backup (`History`, `Guide`, `Backup`)
+- **Offline Reference Guide:** Built-in summaries sourced from NASA's Human Research Program (SANS, sensorimotor/motion sickness, circadian desynchronization, exercise countermeasures, space radiation, and bone fracture risk).
+- **Medical History:** Add dated historical notes or import validated JSON history files with pre-import duplicate detection and preview.
+- **Local Persistence & JSON Portability:** Works 100% offline via `localStorage` or backed by a lightweight SQLite API, with full JSON export/restore.
+
+---
+
+## Mapping to NASA's 5 Hazards of Human Spaceflight
+
+The database schema (`schema.sql`) and UI directly map NASA Human Research Program (HRP) hazards to measurable indicators:
+
+| Spaceflight Hazard | Tracked Indicators & App Modules |
+| :--- | :--- |
+| **Space Radiation** | Dosimeter reference guidance, neurological/balance & alertness symptom tracking |
+| **Altered Gravity Fields** | Bone density T-score, blood pressure, heart rate, muscle strength/endurance, balance |
+| **Isolation & Confinement** | Daily sleep hours, alertness ratings, stress/mood/anxiety sliders |
+| **Distance from Earth** | Mission context (`ISS`, `Moon`, `Mars`), signal-delay reply timeline, autonomous triage |
+| **Hostile & Closed Environments** | Core temperature, heart rate, blood glucose, vision (SANS), adaptive nutrition |
+
+---
+
+## Architecture & Tech Stack
+
+- **Frontend:** Vanilla HTML5, CSS3 (custom dark/light "Mission Control" design system with responsive mobile dock & desktop sidebar), and zero-dependency ES6+ JavaScript.
+- **Backend (Optional / Full-Stack Mode):** Python 3 standard library (`http.server.ThreadingHTTPServer`, `sqlite3`) — zero `pip` packages required.
+- **Database:** SQLite (`crew_health.db`) with normalized tables for vitals history, journal entries, sleep logs, mood check-ins, mission context, NASA hazard mappings, and lossless client state snapshots.
+
+---
+
+## Project Structure
+
+```text
+├── frontend/
+│   └── index.html        # Complete single-file offline-capable web application
+├── backend/              # (or root directory depending on deployment)
+│   ├── server.py         # Zero-dependency Python HTTP server & REST API
+│   ├── db.py             # SQLite data access layer, migrations & symptom classifier
+│   └── schema.sql        # Relational schema + NASA 5 Hazards seed data
+└── README.md
 ```
 
-Open **http://localhost:8000**. That's the whole setup — the same server answers
-the API and serves the page, so there's no separate frontend process and no
-cross-origin configuration.
+*(Note: `server.py` resolves `FRONTEND_DIR` as `../frontend` relative to `server.py`. If keeping all files in a single root directory, ensure `index.html` is placed in `frontend/index.html` or update `FRONTEND_DIR` in `server.py`.)*
 
-Pass a different port if 8000 is taken: `python3 server.py 8080`.
+---
 
-## Why this stack
+## Getting Started
 
-This environment can't run `pip install` or `npm install`, so every piece here
-uses only what ships with Python itself: `http.server` for the web server,
-`sqlite3` for the database, `json` and `re` for everything else. That turned out
-to be a reasonable choice regardless of that constraint — it means the whole
-backend is two readable files, with nothing to install anywhere it eventually runs.
+### Option 1: Static / Standalone Mode (Zero Setup)
+Open `index.html` directly in any modern web browser. All data is saved locally in your browser's `localStorage`, and full JSON backup/restore is available under **More → Backup & restore**.
 
-## Architecture
+### Option 2: Full-Stack Mode with SQLite Backend
+Requires **Python 3.8+** (no external libraries needed).
 
-```
-frontend/index.html  ──fetch()──►  backend/server.py  ──sqlite3──►  backend/crew_health.db
-     (your UI,                      (REST API +                    (5 normalized tables,
-      unchanged)                   static file host)                 see schema.sql)
-```
+1. Ensure the directory layout matches:
+   ```text
+   project-root/
+   ├── frontend/index.html
+   └── backend/
+       ├── server.py
+       ├── db.py
+       └── schema.sql
+   ```
+2. Start the server:
+   ```bash
+   cd backend
+   python3 server.py 8000
+   ```
+3. Open your browser and navigate to:
+   ```text
+   http://localhost:8000
+   ```
+   The SQLite database (`crew_health.db`) will be initialized automatically on first run with the NASA hazard reference tables and a default crew profile.
 
-**Sync model.** The frontend keeps its original `localStorage` cache for instant,
-offline-capable reads and writes — nothing about how it *feels* to use changes.
-On top of that:
+---
 
-- Every `save()` now also pushes the full state to `PUT /api/state` (debounced
-  400ms, so dragging a mood slider doesn't fire a request per pixel).
-- On load, the page pulls `GET /api/state`. If the server already has data,
-  the server wins (that's what makes "my phone got reset / I'm on a new
-  device" actually recoverable). If the server is empty but this browser has
-  cached data, the browser's copy seeds the server instead — so the very
-  first run on a brand-new backend doesn't wipe anything.
-- If the network call fails, the page falls back to the local cache silently
-  and shows **● Offline (local only)** in the top bar; the next successful
-  save flushes everything queued since then.
-- A 15-second background poll (paused while the tab is hidden) picks up
-  changes made from another tab or device without a manual reload.
-- **Demo mode is intentionally local-only.** Clicking "Try demo case" never
-  touches the network or the database — it's a sandbox, exactly as before.
+## API Reference
 
-## Database schema
+When running `server.py`, the following REST endpoints are exposed:
 
-| Table | Purpose | Notable choice |
-|---|---|---|
-| `crew_members` | One row per astronaut. The app currently always uses `id=1`, but every table already has `crew_id`, so adding a second crew member needs no schema change — only a login/selection screen on the frontend. | — |
-| `vitals_readings` | Every blood pressure / blood sugar / bone T-score reading. | The frontend only ever shows the *latest* value, but the server keeps every change as a new row — so there's already a real history to chart later, even though no UI reads it yet. A new row is only inserted when the value or source actually changed. |
-| `journal_entries` | The evidence journal: text, classified areas, the clarifying answer, measurement, what changed, task impact, source. | Primary key is the same id the frontend already generates, so entries can be upserted idempotently. |
-| `sleep_logs` | The daily sleep-hours / alertness check-ins behind the Trends chart. | No stable per-entry id exists on the client, so this table is fully resynced from the array each save — same result, no duplicates. |
-| `mood_checkins` | Stress / mood / anxiety sliders. | Same change-only-inserts pattern as vitals. |
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/ping` | Health check and current server UTC timestamp |
+| `GET` | `/api/state?crew_id=1` | Retrieve full state (vitals, history, journal, sleep, mood, mission, meals) |
+| `PUT` | `/api/state?crew_id=1` | Persist full client state idempotently to SQLite |
+| `GET` | `/api/history?metric=hr&limit=30` | Fetch historical time-series points for a specific vital (`sys`, `dia`, `hr`, `temp`, `glu`, `bone`) |
+| `GET` | `/api/hazards` | Retrieve NASA's 5 spaceflight hazards and their linked indicators |
+| `GET` / `PUT` | `/api/mission` | Get or update mission context (`{"context": "iss" | "moon" | "mars"}`) |
+| `POST` | `/api/journal` | Create and auto-classify a new symptom journal entry |
+| `PATCH` / `DELETE` | `/api/journal/<id>` | Update metadata or delete a specific journal entry |
+| `GET` / `POST` | `/api/backup` & `/api/restore` | Export or restore a complete JSON crew backup |
 
-Full column definitions and constraints are in `backend/schema.sql`.
+---
 
-## REST API
+## Data Privacy & Disclaimers
 
-All endpoints take `?crew_id=1` (default `1` if omitted). Bodies and responses
-are JSON.
-
-| Method & path | What it does |
-|---|---|
-| `GET /api/ping` | Health check. |
-| `GET /api/state` | Returns the full current state in the shape the frontend expects. |
-| `PUT /api/state` | Replaces vitals/journal/log/mood from a full state object — what the frontend calls on every save. History-aware (see above), not a destructive overwrite. |
-| `POST /api/journal` | `{"text": "..."}` → classifies the symptom text with the same rules as the frontend's JS and inserts one journal entry. For other clients (e.g. a future mobile app) that want to add one entry without resending everything. |
-| `PATCH /api/journal/<id>` | Partial update to one entry's `ans`, `areas`, `measure`, `recent`, `task`, or `src`. |
-| `DELETE /api/journal/<id>` | Removes one entry. |
-| `GET /api/backup` | Downloads the current state as a JSON file, generated straight from the database — independent of any one browser's local backup. |
-| `POST /api/restore` | Replaces all of a crew member's data from a JSON payload shaped like `GET /api/state`'s response. |
-
-The frontend itself only uses `GET/PUT /api/state` for simplicity and
-reliability; the granular journal endpoints are tested and ready for a second
-client (a flight-surgeon dashboard, a mobile app) that shouldn't have to
-resend the whole state to log one symptom.
-
-## What was tested
-
-Every endpoint was exercised directly (not just read through) before
-delivery: a full `PUT`/`GET` round trip; all three journal-classification
-cases (an ambiguous phrase, a clear vision match, a clear muscle match)
-checked against the server's output; `PATCH` and `DELETE` on a real entry,
-confirmed against the updated state; the backup endpoint's download headers;
-malformed-JSON input confirmed to return `400` without crashing the server;
-two crew members confirmed fully isolated from each other; and a full
-server kill-and-restart against the same database file, confirmed to come
-back with every value intact.
-
-## Honest limitations
-
-- **Single demo user.** The schema supports many crew members; the app UI
-  does not yet have a way to choose or log in as one. Everything currently
-  reads/writes `crew_id=1`.
-- **No authentication.** Anyone who can reach the server can read or change
-  the data. Fine for a local demo; not fine for anything with real health
-  data.
-- **No HTTPS.** `http.server` serves plain HTTP. A real deployment needs TLS
-  in front of it (a reverse proxy, or a managed host).
-- **SQLite, not a server database.** Perfect for one server process on one
-  machine; a true multi-server NASA deployment would move this to Postgres
-  with the same schema shape and swap `sqlite3` calls for a driver.
-- **Vitals/mood ranges are still placeholders**, inherited from the existing
-  frontend. They need review by flight surgeons and NASA Human Research
-  Program sources before anyone relies on them for a real decision.
-- **No camera input**, by your earlier request.
-- **Cross-device sync is poll-based**, not instant (15-second interval). A
-  production version would use WebSockets or server-sent events for the
-  flight-surgeon-views-it-live case.
-
-## Next steps, in order of what unlocks the most
-
-1. A login/crew-selection screen, so `crew_id` isn't hardcoded.
-2. Move from SQLite to Postgres if this needs to run across more than one
-   server process at once.
-3. Put the server behind HTTPS and add authentication.
-4. Replace the placeholder vitals ranges and journal advice with content
-   reviewed by flight surgeons and NASA HRP sources.
+- **Guidance Only, Not a Medical Diagnosis:** Vital sign ranges, dietary menus, and triage prompts included in this application are demonstration placeholders created for the 2026 NASA Space Apps Challenge. On operational missions, flight surgeons and mission medical protocols define clinical thresholds.
+- **Local-First Privacy:** No telemetry, health logs, or personal notes are transmitted to external cloud servers or third-party AI APIs.

@@ -1,35 +1,30 @@
 """
-Crew Health Companion — database access layer.
+Crew Health Companion: database access layer (stdlib only).
 
-Stdlib-only (sqlite3). Turns the normalized tables in schema.sql into the
-exact JSON shape the frontend already works with:
-
-    { vitals: {sys,glu,bone}, src: {sys,glu,bone}, log: [...], journal: [...], mood: {s,m,a} }
-
-and turns that same shape back into rows when the frontend saves.
+State shape shared with the frontend:
+  { vitals:{sys,dia,hr,temp,glu,bone}, src:{...}, hist:{metric:[{t,v}]},
+    log:[...], journal:[...], mood:{s,m,a}, mission:"iss|moon|mars", meals:{log:[]} }
 """
 
 import json
 import os
 import re
 import sqlite3
+import time
 from datetime import datetime, timezone
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "crew_health.db")
 SCHEMA_PATH = os.path.join(BASE_DIR, "schema.sql")
-DEMO_CREW_ID = 1  # single-crew demo; see README for how this would extend
+DEMO_CREW_ID = 1
+HIST_LIMIT = 30
 
-VALID_METRICS = ("sys", "glu", "bone")
+VALID_METRICS = ("sys", "dia", "hr", "temp", "glu", "bone")
 VALID_SOURCES = ("self", "man", "sim")
 VALID_TASKS = ("", "note", "slow", "block")
 VALID_KINDS = ("", "amb", "pick")
+VALID_MISSIONS = ("iss", "moon", "mars")
 
-# ---------------------------------------------------------------------------
-# Symptom classification — ported line-for-line from the frontend's JS so a
-# journal entry gets the same areas/kind whether it's created online or the
-# browser later replays an offline-queued save.
-# ---------------------------------------------------------------------------
 KEYWORDS = {
     "vision": re.compile(r"blur|vision|\beyes?\b|\bsee\b|seeing|double|squint|\btext\b", re.I),
     "balance": re.compile(r"dizz|balance|orient|spin|vertigo|nause|queas|unsteady", re.I),
@@ -40,7 +35,7 @@ AMBIGUOUS = re.compile(r"checklist|my place|\bread|procedure|screen", re.I)
 
 
 def classify(text):
-    """Mirrors the frontend's classify(t). Returns (areas, is_ambiguous)."""
+    """Mirror of the frontend classify(). Returns (areas, is_ambiguous)."""
     areas = [k for k, rx in KEYWORDS.items() if rx.search(text)]
     is_amb = bool(AMBIGUOUS.search(text)) and "alert" not in areas and not (
         "vision" in areas and re.search(r"blur", text, re.I)
@@ -52,9 +47,10 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-# ---------------------------------------------------------------------------
-# Connection / schema setup
-# ---------------------------------------------------------------------------
+def _new_id():
+    return format(int(time.time() * 1000), "x")
+
+
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -62,138 +58,190 @@ def get_conn():
     return conn
 
 
+def _migrate_vitals(conn):
+    """Older databases only allow metrics sys/glu/bone. Rebuild that table once."""
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='vitals_readings'").fetchone()
+    if row and "'hr'" not in row["sql"]:
+        conn.execute("DROP INDEX IF EXISTS idx_vitals_lookup")
+        conn.execute("ALTER TABLE vitals_readings RENAME TO vitals_old")
+        return True
+    return False
+
+
 def init_db():
-    first_time = not os.path.exists(DB_PATH)
     conn = get_conn()
+    migrating = _migrate_vitals(conn)
     with open(SCHEMA_PATH, encoding="utf-8") as f:
         conn.executescript(f.read())
-    if first_time:
+    if migrating:
+        conn.execute(
+            """INSERT OR IGNORE INTO vitals_readings (crew_id, metric, value, source, recorded_at)
+               SELECT crew_id, metric, value, source, recorded_at FROM vitals_old"""
+        )
+        conn.execute("DROP TABLE vitals_old")
+    if not conn.execute("SELECT 1 FROM crew_members WHERE id = ?", (DEMO_CREW_ID,)).fetchone():
         conn.execute(
             "INSERT INTO crew_members (id, callsign, created_at) VALUES (?, ?, ?)",
             (DEMO_CREW_ID, "Demo Crew Member", now_iso()),
         )
-        conn.commit()
+    conn.commit()
     conn.close()
 
 
 def ensure_crew(conn, crew_id):
-    row = conn.execute("SELECT id FROM crew_members WHERE id = ?", (crew_id,)).fetchone()
-    if not row:
+    if not conn.execute("SELECT 1 FROM crew_members WHERE id = ?", (crew_id,)).fetchone():
         conn.execute(
             "INSERT INTO crew_members (id, callsign, created_at) VALUES (?, ?, ?)",
             (crew_id, f"Crew {crew_id}", now_iso()),
         )
 
 
-# ---------------------------------------------------------------------------
-# Read: assemble the frontend's D object from normalized rows
-# ---------------------------------------------------------------------------
+def _num(v):
+    if v is None:
+        return ""
+    return str(int(v)) if float(v).is_integer() else str(round(float(v), 4))
+
+
+# ---------------------------------------------------------------- read
+def get_history(conn, crew_id, metric, limit=HIST_LIMIT):
+    rows = conn.execute(
+        """SELECT recorded_at, value FROM vitals_readings
+           WHERE crew_id = ? AND metric = ? AND value IS NOT NULL
+           ORDER BY recorded_at DESC, id DESC LIMIT ?""",
+        (crew_id, metric, limit),
+    ).fetchall()
+    return [{"t": r["recorded_at"], "v": r["value"]} for r in reversed(rows)]
+
+
+def get_mission(conn, crew_id):
+    row = conn.execute("SELECT context FROM mission_context WHERE crew_id = ?", (crew_id,)).fetchone()
+    return row["context"] if row else "iss"
+
+
+def set_mission(conn, crew_id, context):
+    if context not in VALID_MISSIONS:
+        raise ValueError("context must be one of " + ", ".join(VALID_MISSIONS))
+    ensure_crew(conn, crew_id)
+    conn.execute(
+        """INSERT INTO mission_context (crew_id, context, updated_at) VALUES (?,?,?)
+           ON CONFLICT(crew_id) DO UPDATE SET context=excluded.context, updated_at=excluded.updated_at""",
+        (crew_id, context, now_iso()),
+    )
+    conn.commit()
+    return context
+
+
+def get_hazards(conn):
+    out = []
+    for h in conn.execute("SELECT key, position, name, summary FROM hazards ORDER BY position"):
+        ind = {"vital": [], "area": [], "checkin": []}
+        for r in conn.execute("SELECT kind, indicator FROM hazard_indicators WHERE hazard_key = ?", (h["key"],)):
+            ind[r["kind"]].append(r["indicator"])
+        out.append({"key": h["key"], "position": h["position"], "name": h["name"],
+                    "summary": h["summary"], "indicators": ind})
+    return out
+
+
+def _snapshot(conn, crew_id):
+    row = conn.execute("SELECT body FROM client_snapshots WHERE crew_id = ?", (crew_id,)).fetchone()
+    try:
+        return json.loads(row["body"]) if row else {}
+    except ValueError:
+        return {}
+
+
 def get_state(conn, crew_id):
-    vitals = {"sys": "", "glu": "", "bone": ""}
-    src = {"sys": "self", "glu": "self", "bone": "self"}
+    vitals = {m: "" for m in VALID_METRICS}
+    src = {m: "self" for m in VALID_METRICS}
     for metric in VALID_METRICS:
         row = conn.execute(
-            """SELECT value, source FROM vitals_readings
-               WHERE crew_id = ? AND metric = ?
+            """SELECT value, source FROM vitals_readings WHERE crew_id = ? AND metric = ?
                ORDER BY recorded_at DESC, id DESC LIMIT 1""",
             (crew_id, metric),
         ).fetchone()
         if row:
-            vitals[metric] = "" if row["value"] is None else _num(row["value"])
+            vitals[metric] = _num(row["value"])
             src[metric] = row["source"]
+    hist = {m: get_history(conn, crew_id, m) for m in VALID_METRICS}
 
+    snap = _snapshot(conn, crew_id)
+    followups = {str(e.get("id")): e.get("followups") or [] for e in snap.get("journal", []) if isinstance(e, dict)}
     journal = []
     for row in conn.execute(
-        "SELECT * FROM journal_entries WHERE crew_id = ? ORDER BY created_at DESC, rowid DESC",
-        (crew_id,),
+        "SELECT * FROM journal_entries WHERE crew_id = ? ORDER BY created_at DESC, rowid DESC", (crew_id,)
     ):
         journal.append({
-            "id": row["id"],
-            "t": row["created_at"],
-            "text": row["text"],
-            "areas": json.loads(row["areas"]),
-            "base": json.loads(row["base"]),
-            "kind": row["kind"],
-            "ans": row["ans"],
-            "measure": row["measure"],
-            "recent": row["recent"],
-            "task": row["task"],
-            "src": row["source"],
+            "id": row["id"], "t": row["created_at"], "text": row["text"],
+            "areas": json.loads(row["areas"]), "base": json.loads(row["base"]),
+            "kind": row["kind"], "ans": row["ans"], "measure": row["measure"],
+            "recent": row["recent"], "task": row["task"], "src": row["source"],
+            "followups": followups.get(row["id"], []),
         })
 
     log = [
-        {"t": row["recorded_at"], "sleep": row["sleep_hours"], "alert": row["alertness"]}
-        for row in conn.execute(
+        {"t": r["recorded_at"], "sleep": r["sleep_hours"], "alert": r["alertness"]}
+        for r in conn.execute(
             "SELECT recorded_at, sleep_hours, alertness FROM sleep_logs WHERE crew_id = ? ORDER BY recorded_at ASC, id ASC",
             (crew_id,),
         )
     ]
-
-    mood_row = conn.execute(
+    m = conn.execute(
         "SELECT stress, mood, anxiety FROM mood_checkins WHERE crew_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 1",
         (crew_id,),
     ).fetchone()
-    mood = {"s": mood_row["stress"], "m": mood_row["mood"], "a": mood_row["anxiety"]} if mood_row else {"s": 5, "m": 6, "a": 4}
+    mood = {"s": m["stress"], "m": m["mood"], "a": m["anxiety"]} if m else {"s": 5, "m": 6, "a": 4}
 
-    return {"vitals": vitals, "src": src, "log": log, "journal": journal, "mood": mood}
-
-
-def _num(v):
-    """Render a stored REAL as the frontend expects: '120' not '120.0'."""
-    if v is None:
-        return ""
-    if float(v).is_integer():
-        return str(int(v))
-    return str(v)
+    meals = snap.get("meals") if isinstance(snap.get("meals"), dict) else {"log": []}
+    return {"vitals": vitals, "src": src, "hist": hist, "log": log, "journal": journal,
+            "mood": mood, "mission": get_mission(conn, crew_id), "meals": meals}
 
 
-# ---------------------------------------------------------------------------
-# Write: decompose an incoming D object into the normalized tables.
-#
-# Vitals/mood only grow a new history row when the value actually changed,
-# so dragging a slider back and forth doesn't flood the table. Journal is a
-# true upsert-by-id plus delete-what's-missing, because the frontend already
-# manages that list (add/edit/delete) and always sends the full list back.
-# Sleep log entries have no id in the frontend, so the whole log array is
-# resynced (idempotent: same array in -> same rows out).
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------- write
 def put_state(conn, crew_id, data):
     ensure_crew(conn, crew_id)
     ts = now_iso()
-
-    # --- vitals: insert a new row only on change ---
     vitals = data.get("vitals") or {}
     src = data.get("src") or {}
-    for metric in VALID_METRICS:
-        raw = vitals.get(metric, "")
-        value = None
-        if raw not in ("", None):
-            try:
-                value = float(raw)
-            except (TypeError, ValueError):
-                value = None
-        source = src.get(metric) if src.get(metric) in VALID_SOURCES else "self"
+    hist = data.get("hist") if isinstance(data.get("hist"), dict) else {}
 
+    for metric in VALID_METRICS:
+        source = src.get(metric) if src.get(metric) in VALID_SOURCES else "self"
+        # 1) replay client history; the unique index makes this idempotent
+        for pt in (hist.get(metric) or [])[-HIST_LIMIT:]:
+            try:
+                v, t = float(pt.get("v")), str(pt.get("t") or "")
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if t:
+                conn.execute(
+                    "INSERT OR IGNORE INTO vitals_readings (crew_id, metric, value, source, recorded_at) VALUES (?,?,?,?,?)",
+                    (crew_id, metric, v, source, t),
+                )
+        # 2) fall back to a change-only row when the client sent no history for it
+        raw = vitals.get(metric, "")
+        try:
+            value = None if raw in ("", None) else float(raw)
+        except (TypeError, ValueError):
+            value = None
         latest = conn.execute(
-            """SELECT value, source FROM vitals_readings
-               WHERE crew_id = ? AND metric = ? ORDER BY recorded_at DESC, id DESC LIMIT 1""",
+            """SELECT value, source FROM vitals_readings WHERE crew_id = ? AND metric = ?
+               ORDER BY recorded_at DESC, id DESC LIMIT 1""",
             (crew_id, metric),
         ).fetchone()
-        changed = (latest is None) or (latest["value"] != value) or (latest["source"] != source)
-        if changed and not (latest is None and value is None):
+        if (latest is None and value is not None) or (
+            latest is not None and (latest["value"] != value or latest["source"] != source)
+        ):
             conn.execute(
-                "INSERT INTO vitals_readings (crew_id, metric, value, source, recorded_at) VALUES (?,?,?,?,?)",
+                "INSERT OR IGNORE INTO vitals_readings (crew_id, metric, value, source, recorded_at) VALUES (?,?,?,?,?)",
                 (crew_id, metric, value, source, ts),
             )
 
-    # --- journal: upsert by id, delete anything no longer present ---
-    incoming = data.get("journal") or []
-    keep_ids = []
-    for e in incoming:
+    keep = []
+    for e in data.get("journal") or []:
         eid = str(e.get("id") or "")
         if not eid:
             continue
-        keep_ids.append(eid)
+        keep.append(eid)
         areas = [a for a in (e.get("areas") or []) if isinstance(a, str)]
         base = [a for a in (e.get("base") or []) if isinstance(a, str)]
         kind = e.get("kind") if e.get("kind") in VALID_KINDS else ""
@@ -204,79 +252,81 @@ def put_state(conn, crew_id, data):
                  (id, crew_id, text, areas, base, kind, ans, measure, recent, task, source, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
-                 text=excluded.text, areas=excluded.areas, base=excluded.base,
-                 kind=excluded.kind, ans=excluded.ans, measure=excluded.measure,
-                 recent=excluded.recent, task=excluded.task, source=excluded.source""",
-            (eid, crew_id, str(e.get("text") or ""), json.dumps(areas), json.dumps(base),
-             kind, str(e.get("ans") or ""), str(e.get("measure") or ""), str(e.get("recent") or ""),
+                 text=excluded.text, areas=excluded.areas, base=excluded.base, kind=excluded.kind,
+                 ans=excluded.ans, measure=excluded.measure, recent=excluded.recent,
+                 task=excluded.task, source=excluded.source""",
+            (eid, crew_id, str(e.get("text") or ""), json.dumps(areas), json.dumps(base), kind,
+             str(e.get("ans") or ""), str(e.get("measure") or ""), str(e.get("recent") or ""),
              task, source, str(e.get("t") or ts)),
         )
-    if keep_ids:
-        placeholders = ",".join("?" for _ in keep_ids)
+    if keep:
         conn.execute(
-            f"DELETE FROM journal_entries WHERE crew_id = ? AND id NOT IN ({placeholders})",
-            (crew_id, *keep_ids),
+            f"DELETE FROM journal_entries WHERE crew_id = ? AND id NOT IN ({','.join('?' for _ in keep)})",
+            (crew_id, *keep),
         )
     else:
         conn.execute("DELETE FROM journal_entries WHERE crew_id = ?", (crew_id,))
 
-    # --- sleep log: resync the whole array (no stable ids on the client) ---
-    incoming_log = data.get("log") or []
     conn.execute("DELETE FROM sleep_logs WHERE crew_id = ?", (crew_id,))
-    for entry in incoming_log:
+    for entry in data.get("log") or []:
         try:
-            sleep_hours = float(entry.get("sleep"))
-            alertness = int(entry.get("alert"))
-        except (TypeError, ValueError):
+            sleep_hours, alertness = float(entry.get("sleep")), int(entry.get("alert"))
+        except (TypeError, ValueError, AttributeError):
             continue
-        if not (1 <= alertness <= 5):
-            continue
-        conn.execute(
-            "INSERT INTO sleep_logs (crew_id, sleep_hours, alertness, recorded_at) VALUES (?,?,?,?)",
-            (crew_id, sleep_hours, alertness, str(entry.get("t") or ts)),
-        )
+        if 1 <= alertness <= 5:
+            conn.execute(
+                "INSERT INTO sleep_logs (crew_id, sleep_hours, alertness, recorded_at) VALUES (?,?,?,?)",
+                (crew_id, sleep_hours, alertness, str(entry.get("t") or ts)),
+            )
 
-    # --- mood: insert a new row only on change ---
     mood = data.get("mood") or {}
     try:
         s, m, a = int(mood.get("s", 5)), int(mood.get("m", 6)), int(mood.get("a", 4))
     except (TypeError, ValueError):
         s, m, a = 5, 6, 4
-    s, m, a = max(1, min(10, s)), max(1, min(10, m)), max(1, min(10, a))
-    latest_mood = conn.execute(
+    s, m, a = (max(1, min(10, x)) for x in (s, m, a))
+    last = conn.execute(
         "SELECT stress, mood, anxiety FROM mood_checkins WHERE crew_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 1",
         (crew_id,),
     ).fetchone()
-    if not latest_mood or (latest_mood["stress"], latest_mood["mood"], latest_mood["anxiety"]) != (s, m, a):
+    if not last or (last["stress"], last["mood"], last["anxiety"]) != (s, m, a):
         conn.execute(
             "INSERT INTO mood_checkins (crew_id, stress, mood, anxiety, recorded_at) VALUES (?,?,?,?,?)",
             (crew_id, s, m, a, ts),
         )
 
+    if data.get("mission") in VALID_MISSIONS:
+        conn.execute(
+            """INSERT INTO mission_context (crew_id, context, updated_at) VALUES (?,?,?)
+               ON CONFLICT(crew_id) DO UPDATE SET context=excluded.context, updated_at=excluded.updated_at""",
+            (crew_id, data["mission"], ts),
+        )
+
+    conn.execute(
+        """INSERT INTO client_snapshots (crew_id, body, updated_at) VALUES (?,?,?)
+           ON CONFLICT(crew_id) DO UPDATE SET body=excluded.body, updated_at=excluded.updated_at""",
+        (crew_id, json.dumps({"journal": data.get("journal") or [], "meals": data.get("meals") or {"log": []}}), ts),
+    )
     conn.commit()
     return get_state(conn, crew_id)
 
 
 def add_journal_entry(conn, crew_id, text):
-    """Server-side equivalent of the frontend's addEntry(): classify and insert."""
     ensure_crew(conn, crew_id)
     areas, is_amb = classify(text)
     base = [a for a in areas if a not in ("vision", "alert")]
     entry = {
-        "id": _new_id(),
-        "t": now_iso(),
-        "text": text,
-        "areas": base if is_amb else areas,
-        "base": base if is_amb else [],
+        "id": _new_id(), "t": now_iso(), "text": text,
+        "areas": base if is_amb else areas, "base": base if is_amb else [],
         "kind": "amb" if is_amb else ("pick" if not areas else ""),
-        "ans": "", "measure": "", "recent": "", "task": "", "src": "self",
+        "ans": "", "measure": "", "recent": "", "task": "", "src": "self", "followups": [],
     }
     conn.execute(
         """INSERT INTO journal_entries
              (id, crew_id, text, areas, base, kind, ans, measure, recent, task, source, created_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (entry["id"], crew_id, entry["text"], json.dumps(entry["areas"]), json.dumps(entry["base"]),
-         entry["kind"], entry["ans"], entry["measure"], entry["recent"], entry["task"], entry["src"], entry["t"]),
+        (entry["id"], crew_id, text, json.dumps(entry["areas"]), json.dumps(entry["base"]),
+         entry["kind"], "", "", "", "", "self", entry["t"]),
     )
     conn.commit()
     return entry
@@ -285,8 +335,3 @@ def add_journal_entry(conn, crew_id, text):
 def delete_journal_entry(conn, crew_id, entry_id):
     conn.execute("DELETE FROM journal_entries WHERE crew_id = ? AND id = ?", (crew_id, entry_id))
     conn.commit()
-
-
-def _new_id():
-    import time
-    return format(int(time.time() * 1000), "x")
